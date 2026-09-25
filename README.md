@@ -26,8 +26,8 @@ For the PyTecplot scripts, first enable connections in Tecplot 360:
 
 | File | Purpose |
 |---|---|
-| `derived_variables.py` | Computes normalised and turbulence-derived variables in the loaded dataset. It detects the turbulence model (RANS, DES/DDES SST, LES/DES SA) from the available variables and skips any equation whose inputs are missing. Options include `--dry-run`, `--zones`, `--model`, `--eps` and `--prune`. |
-| `dissipation_scales.py` | Runs only the dissipation / length-scale tail of the `derived_variables.py` chain, starting at `{dvdz}`. |
+| `derived_variables.py` | Computes the general derived variables in the loaded dataset: coordinates, theta, normalised velocities, RMS values, turbulent fluxes, `uv` and k. It detects the turbulence model (RANS, DES/DDES SST, LES/DES SA) from the available variables and skips any equation whose inputs are missing. Options include `--dry-run`, `--zones`, `--model` and `--prune`. |
+| `dissipation_scales.py` | Computes everything needed for the Kolmogorov and Obukhov-Corrsin scales: fluctuation gradients, `dissipation`, `eta`, `eta_theta`, `l_c_over_eta` and `l_c_corsin`. It is a separate script because this is the slow part. It has the same options as `derived_variables.py`, plus `--eps`. |
 | `tecplot_z_averages.ipynb` | Notebook that computes spanwise (z) averages directly in a running Tecplot session. It auto-detects stations from the `…xh<N>` zone names and interpolates slices by position, so slices with different point counts can be averaged. |
 | `tecplot_average/TimeAverage.py` | Time-averages a strand of zones. It needs `tpmath.py` and `tputils.py` from the same folder, which come from [Tecplot's handyscripts](https://github.com/Tecplot/handyscripts). |
 

@@ -5,13 +5,16 @@ model the case came from, and only runs the equations whose inputs are actually
 present.  Equations that cannot be satisfied are reported and skipped rather
 than raising.
 
+This covers the general variables (coordinates, theta, normalized velocities,
+RMS values, turbulent fluxes, {uv} and k).  The slow dissipation / eta /
+l_c_corsin chain is run separately with dissipation_scales.py.
+
 usage:
 
     > python derived_variables.py                    # execute on all zones
     > python derived_variables.py --dry-run          # print the equations
     > python derived_variables.py --dry-run --model les
     > python derived_variables.py --zones 1-4,7
-    > python derived_variables.py --eps 1e-12        # floor dissipation in {eta}
     > python derived_variables.py --prune            # drop unused variables
 
 Enable "Scripting -> PyTecplot Connections" in the Tecplot 360 GUI before
@@ -34,15 +37,6 @@ Turbulence model detection
 LES and DES/DDES SA carry the same variables (k_SGS + k_res), so they cannot be
 told apart from the dataset alone.  Pass --model les or --model des_sa to get
 {k_LES} or {k_DES_SA} instead of the neutral {k_tot}.
-
-Divide by zero
---------------
-{dissipation} is exactly zero wherever the resolved fluctuations have no
-gradient (walls, symmetry planes), and {eta} divides by it.  By default the
-engine clamps N/0 to the largest float, matching the "Ignore Divide by Zero"
-checkbox in the GUI's Data Alter dialog; {eta} then reaches ~1e76 at those
-nodes, which will flatten any contour range you put on it.  --eps X floors the
-denominator instead so {eta} stays finite and plottable.
 """
 import argparse
 import re
@@ -111,10 +105,12 @@ def model_variables(model):
     return variables
 
 
-def build_equations(model, eps=0.0):
-    """Return the full ordered list of (variable name, Tecplot equation) pairs.
+def general_equations(model, eps=0.0):
+    """The general chain as an ordered list of (variable name, equation) pairs.
 
     Everything is listed here; plan() drops whatever the dataset cannot feed.
+    The dissipation / length-scale chain lives in scale_equations() and is run
+    by dissipation_scales.py, since it is by far the slowest part.
     """
     eqs = []
 
@@ -131,12 +127,8 @@ def build_equations(model, eps=0.0):
     eqs.append(("v_rms", "{v_rms} = {RMS Y Velocity}/%s" % U_REF))
 
     # -- velocity and temperature fluctuations ----------------------------
-    # Built here rather than inline, since the fluxes, {uv} and the gradients
-    # behind {dissipation} all reuse them.
-    for small, cap in (("u", "X"), ("v", "Y"), ("w", "Z")):
-        eqs.append((f"small_{small}",
-                    "{small_%s} = {Mean %s Velocity}-{%s Velocity}"
-                    % (small, cap, cap)))
+    # Built here rather than inline, since the fluxes and {uv} reuse them.
+    eqs += velocity_fluctuations(("u", "v"))
     eqs.append(("small_theta",
                 "{small_theta} = {Mean Static Temperature} - {Static Temperature}"))
 
@@ -158,27 +150,42 @@ def build_equations(model, eps=0.0):
         _, total_k, total_k_equation = MODELS[model]
         eqs.append((total_k, total_k_equation))
 
+    return eqs
+
+
+def velocity_fluctuations(components):
+    """{small_u} etc., shared by both chains."""
+    caps = {"u": "X", "v": "Y", "w": "Z"}
+    return [(f"small_{small}",
+             "{small_%s} = {Mean %s Velocity}-{%s Velocity}"
+             % (small, caps[small], caps[small]))
+            for small in components]
+
+
+def scale_equations(model=None, eps=0.0):
+    """Everything {eta} and {l_c_corsin} need, starting from the raw data."""
+    eqs = velocity_fluctuations(("u", "v", "w"))
+
     # -- fluctuation gradients --------------------------------------------
-    # for small in ("u", "v", "w"):
-    #     for axis in ("x", "y", "z"):
-    #         eqs.append((f"d{small}d{axis}",
-    #                     "{d%sd%s} = dd%s({small_%s})" % (small, axis, axis, small)))
-    #
-    #
-    # # -- pseudo-dissipation, nu * (du_i/dx_j)(du_i/dx_j) ------------------
-    # grads = " + ".join("{d%sd%s}**2" % (s, a)
-    #                    for s in ("u", "v", "w") for a in ("x", "y", "z"))
-    # eqs.append(("dissipation", "{dissipation} = %s * (%s)" % (NU, grads)))
-    #
-    # # -- Kolmogorov and Obukhov-Corrsin scales ----------------------------
-    # # 1/4 and -3/4 are written as decimals so Tecplot cannot do integer math.
-    # denominator = "{dissipation}" if not eps else "({dissipation} + %s)" % eps
-    # eqs.append(("eta", "{eta} = ((%s)**3 / %s)**0.25" % (NU, denominator)))
-    # eqs.append(("Pr", "{Pr} = %s" % PR))
-    # eqs.append(("eta_theta", "{eta_theta} = {eta}*{Pr}**(-0.75)"))
-    # eqs.append(("l_c", "{l_c} = %s" % L_C))
-    # eqs.append(("l_c_over_eta", "{l_c_over_eta} = {l_c} / {eta}"))
-    # eqs.append(("l_c_corsin", "{l_c_corsin} = {l_c}/{eta_theta}"))
+    for small in ("u", "v", "w"):
+        for axis in ("x", "y", "z"):
+            eqs.append((f"d{small}d{axis}",
+                        "{d%sd%s} = dd%s({small_%s})" % (small, axis, axis, small)))
+
+    # -- pseudo-dissipation, nu * (du_i/dx_j)(du_i/dx_j) ------------------
+    grads = " + ".join("{d%sd%s}**2" % (s, a)
+                       for s in ("u", "v", "w") for a in ("x", "y", "z"))
+    eqs.append(("dissipation", "{dissipation} = %s * (%s)" % (NU, grads)))
+
+    # -- Kolmogorov and Obukhov-Corrsin scales ----------------------------
+    # 1/4 and -3/4 are written as decimals so Tecplot cannot do integer math.
+    denominator = "{dissipation}" if not eps else "({dissipation} + %s)" % eps
+    eqs.append(("eta", "{eta} = ((%s)**3 / %s)**0.25" % (NU, denominator)))
+    eqs.append(("Pr", "{Pr} = %s" % PR))
+    eqs.append(("eta_theta", "{eta_theta} = {eta}*{Pr}**(-0.75)"))
+    eqs.append(("l_c", "{l_c} = %s" % L_C))
+    eqs.append(("l_c_over_eta", "{l_c_over_eta} = {l_c} / {eta}"))
+    eqs.append(("l_c_corsin", "{l_c_corsin} = {l_c}/{eta_theta}"))
 
     return eqs
 
@@ -217,9 +224,9 @@ def equation_inputs(equation):
 def unused_variables(reference, available, protect):
     """The dataset variables no equation reads and none of them produces.
 
-    `reference` is always the whole chain, even when only part of it is being
-    run: the rest has usually already been written into the dataset, and those
-    results must not be mistaken for variables nobody wants.
+    `reference` is always both chains, even when only one is being run: the
+    other has usually already been written into the dataset, and those results
+    (and its inputs) must not be mistaken for variables nobody wants.
     """
     protect = {name.lower() for name in protect}
     produced = {name.lower() for name, _ in reference}
@@ -282,9 +289,6 @@ def add_common_arguments(parser):
     parser.add_argument("--model", default="auto",
                         choices=["auto"] + sorted(MODELS),
                         help="override the detected turbulence model")
-    parser.add_argument("--eps", type=float, default=0.0,
-                        help="floor added to {dissipation} in the {eta} equation "
-                             "to keep eta finite where dissipation is zero")
     parser.add_argument("--no-ignore-divide-by-zero", dest="ignore_divide_by_zero",
                         action="store_false",
                         help="let Tecplot raise on divide by zero instead of clamping")
@@ -298,8 +302,9 @@ def add_common_arguments(parser):
     return parser
 
 
-def run(args, subset=None):
-    """Plan and execute the chain.  subset() filters the equations if given."""
+def run(args, chain=general_equations):
+    """Plan and execute one chain (general_equations or scale_equations)."""
+    eps = getattr(args, "eps", 0.0)
     if args.dry_run:
         model = None if args.model == "auto" else args.model
         available = model_variables(model or "des_sst")
@@ -313,19 +318,10 @@ def run(args, subset=None):
         model = detect_model(available) if args.model == "auto" else args.model
         print(f"Dataset        : {len(available)} variables")
 
-    # The whole chain, kept aside so that pruning judges "unused" against every
+    # Both chains, kept aside so that pruning judges "unused" against every
     # equation rather than only the ones this run happens to execute.
-    reference = build_equations(model, args.eps)
-    equations = reference
-    if subset is not None:
-        full, equations = equations, subset(equations)
-        if args.dry_run:
-            # No dataset to inspect, so assume the equations the subset skipped
-            # over have already been run into it.
-            selected = {name for name, _ in equations}
-            available = list(available) + [name for name, _ in full
-                                           if name not in selected]
-    kept, skipped = plan(equations, available)
+    reference = general_equations(model, eps) + scale_equations(model, eps)
+    kept, skipped = plan(chain(model, eps), available)
     report_plan(model, kept, skipped)
 
     if args.dry_run:
