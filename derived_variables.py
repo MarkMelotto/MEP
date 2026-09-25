@@ -355,15 +355,6 @@ def report_plan(model, kept, skipped):
     print()
 
 
-def report_range(dataset, name, zones):
-    """Print the min/max of a variable so zero/huge values are visible."""
-    variable = dataset.variable(name)
-    zones = list(dataset.zones()) if zones is None else zones
-    lo = min(variable.values(z).minmax()[0] for z in zones)
-    hi = max(variable.values(z).minmax()[1] for z in zones)
-    print(f"    {name:<14} min = {lo:.6g}   max = {hi:.6g}")
-
-
 def add_common_arguments(parser):
     parser.add_argument("--dry-run", action="store_true",
                         help="print the equations instead of executing them")
@@ -453,14 +444,6 @@ def run(args, chain=general_equations):
                 ignore_divide_by_zero=args.ignore_divide_by_zero)
 
     computed = {name for name, _ in kept}
-    ranges = [n for n in ("dissipation", "eta", "l_c_over_eta", "l_c_corsin",
-                          "L_t", "F_DES", "d_tilde")
-              if n in computed]
-    if ranges:
-        print("\nRanges:")
-        for name in ranges:
-            report_range(dataset, name, zones)
-
     print(f"\nDone - {len(kept)} variables computed on "
           f"{'all zones' if zones is None else str(len(zones)) + ' zone(s)'}.")
     return dataset, zones, computed
