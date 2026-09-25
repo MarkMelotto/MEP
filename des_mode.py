@@ -10,8 +10,8 @@ and skipped.  Constants are at the top of derived_variables.py.
 
 usage:
 
-    > python des_mode.py                   # DES and DDES, all zones
-    > python des_mode.py --variant ddes    # only DDES
+    > python des_mode.py                   # asks DES / DDES / both
+    > python des_mode.py --variant ddes    # only DDES, no question
     > python des_mode.py --dry-run         # just print the equations
     > python des_mode.py --zones 1-4,7
 
@@ -23,12 +23,28 @@ import argparse
 from derived_variables import add_common_arguments, mode_equations, run
 
 
+CHOICES = {"1": "des", "2": "ddes", "3": "both"}
+
+
+def ask_variant():
+    """Ask which mode check to compute until a valid choice is given."""
+    print("Which mode check?\n  1) DES\n  2) DDES\n  3) both")
+    while True:
+        answer = input("Choice [1-3]: ").strip().lower()
+        if answer in CHOICES:
+            return CHOICES[answer]
+        if answer in CHOICES.values():
+            return answer
+        print("Please enter 1, 2 or 3.")
+
+
 def main():
     parser = add_common_arguments(argparse.ArgumentParser(description=__doc__))
     parser.add_argument("--variant", choices=["des", "ddes", "both"],
-                        default="both", help="which mode check to compute")
+                        help="which mode check to compute (asked if not given)")
     args = parser.parse_args()
-    variants = ("des", "ddes") if args.variant == "both" else (args.variant,)
+    variant = args.variant or ask_variant()
+    variants = ("des", "ddes") if variant == "both" else (variant,)
     run(args, chain=lambda model, eps: mode_equations(model, eps, variants))
 
 
