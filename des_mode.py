@@ -47,18 +47,6 @@ def ask_mode():
         print(f"Please enter a number from 1 to {len(CHOICES)}.")
 
 
-def report_les_fraction(dataset, zones):
-    """Share of nodes with LES_mode = 1, over the zones that were computed."""
-    zones = list(dataset.zones()) if zones is None else zones
-    variable = dataset.variable("LES_mode")
-    total = les = 0
-    for zone in zones:
-        values = variable.values(zone).as_numpy_array()
-        total += values.size
-        les += (values > 0.5).sum()
-    print(f"LES mode       : {les} of {total} nodes ({100 * les / total:.1f} %)")
-
-
 def main():
     parser = add_common_arguments(argparse.ArgumentParser(description=__doc__))
     parser.add_argument("--mode", choices=MODES,
@@ -71,9 +59,7 @@ def main():
     print(f"Mode           : {mode.upper()}")
     print(f"Input          : {args.input or 'active Tecplot dataset'}")
 
-    result = run(args, chain=lambda model, eps: mode_equations(model, eps, mode))
-    if result is not None and "LES_mode" in result[2]:
-        report_les_fraction(*result[:2])
+    run(args, chain=lambda model, eps: mode_equations(model, eps, mode))
 
 
 if __name__ == "__main__":

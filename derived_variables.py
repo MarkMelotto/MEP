@@ -387,10 +387,7 @@ def load_dataset(path):
 
 
 def run(args, chain=general_equations):
-    """Plan and execute one chain (general, scale or mode equations).
-
-    Returns (dataset, zones, computed names), or None on a dry run.
-    """
+    """Plan and execute one chain (general, scale or mode equations)."""
     eps = getattr(args, "eps", 0.0)
     if args.dry_run:
         model = None if args.model == "auto" else args.model
@@ -443,10 +440,8 @@ def run(args, chain=general_equations):
                 equation, zones=zones, value_location=ValueLocation.Nodal,
                 ignore_divide_by_zero=args.ignore_divide_by_zero)
 
-    computed = {name for name, _ in kept}
     print(f"\nDone - {len(kept)} variables computed on "
           f"{'all zones' if zones is None else str(len(zones)) + ' zone(s)'}.")
-    return dataset, zones, computed
 
 
 def main():
