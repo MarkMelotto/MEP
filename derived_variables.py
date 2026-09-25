@@ -110,7 +110,7 @@ def model_variables(model):
     if model in ("rans", "des_sst"):
         variables += [TKE_VAR, "Specific Dissipation Rate"]
     if model in ("rans", "des_sst", "des_sa"):
-        variables += ["Distance to wall", "Turbulent Viscosity"]
+        variables += ["Distance from Wall", "Turbulent Viscosity"]
     if model in ("des_sst", "des_sa", "les", "sgs_only"):
         variables.append(SGS_VAR)
     return variables
@@ -218,7 +218,7 @@ def mode_equations(model=None, eps=0.0, mode="sst-des"):
 
 def sa_mode_equations(mode):
     """SA-DES / SA-DDES: the model uses d_tilde instead of the wall distance d."""
-    d = "{Distance to wall}"
+    d = "{Distance from Wall}"
     les_scale = "(%s*%s)" % (C_DES_SA, DELTA)
     eqs = []
 
@@ -249,7 +249,7 @@ def sa_mode_equations(mode):
 def sst_mode_equations(mode):
     """SST-DES / SST-DDES: F_DES multiplies the k destruction term."""
     k, omega, d = ("{Turbulent Kinetic Energy}", "{Specific Dissipation Rate}",
-                   "{Distance to wall}")
+                   "{Distance from Wall}")
     les_scale = "(%s*%s)" % (C_DES_SST, DELTA)
 
     # -- SST turbulent length scale, sqrt(k)/(beta* omega) ----------------
