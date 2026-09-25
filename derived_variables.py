@@ -51,6 +51,11 @@ NU = 2.18601847e-7         # kinematic viscosity [m2/s]
 PR = 0.025                 # Prandtl number [-]
 L_C = 0.00225              # characteristic (cell/probe) length [m]
 
+# DES / DDES mode check (des_mode.py)
+BETA_STAR = 0.09           # SST beta*
+C_DES = 0.61               # DES constant (k-omega branch)
+KAPPA = 0.4187             # von Karman constant
+
 # Temperature scale: (T_hot - T_ref) - 2*(T_cold - T_ref).  Written out as an
 # expression instead of a pre-multiplied float so the equations stay readable.
 DT = f"(({T_HOT}-{T_REF})-2*({T_COLD}-{T_REF}))"
@@ -99,7 +104,8 @@ def model_variables(model):
         variables += [f"{axis} Velocity", f"Mean {axis} Velocity",
                       f"RMS {axis} Velocity"]
     if model in ("rans", "des_sst"):
-        variables.append(TKE_VAR)
+        variables += [TKE_VAR, "Specific Dissipation Rate",
+                      "Turbulent Viscosity", "Distance to wall"]
     if model in ("des_sst", "des_sa", "les", "sgs_only"):
         variables.append(SGS_VAR)
     return variables
@@ -190,6 +196,40 @@ def scale_equations(model=None, eps=0.0):
     return eqs
 
 
+def mode_equations(model=None, eps=0.0, variants=("des", "ddes")):
+    """Where a DES / DDES run is in LES mode (1) or RANS (SST) mode (0)."""
+    les_scale = "%s*%s" % (C_DES, L_C)
+
+    # -- SST RANS length scale, sqrt(k)/(beta* omega) ---------------------
+    eqs = [("l_RANS",
+            "{l_RANS} = sqrt({Turbulent Kinetic Energy})"
+            "/(%s*{Specific Dissipation Rate} + 1e-30)" % BETA_STAR)]
+
+    # -- DES97: the model takes whichever length scale is smaller ---------
+    if "des" in variants:
+        eqs.append(("l_DES", "{l_DES} = min({l_RANS}, %s)" % les_scale))
+        eqs.append(("Mode_DES",
+                    "{Mode_DES} = max(0, min(1, ({l_RANS}-{l_DES})/1e-9))"))
+
+    # -- DDES: LES only where the shielding function f_d lets it ----------
+    if "ddes" in variants:
+        grads = " + ".join("dd%s({%s Velocity})**2" % (a, c)
+                           for c in ("X", "Y", "Z") for a in ("x", "y", "z"))
+        eqs.append(("gradient_abs", "{gradient_abs} = (%s)**0.5" % grads))
+        eqs.append(("r_d",
+                    "{r_d} = min(5, ({Turbulent Viscosity}+%s)"
+                    "/(({gradient_abs}+1e-30)*%s**2*({Distance to wall}**2+1e-30)))"
+                    % (NU, KAPPA)))
+        eqs.append(("f_d", "{f_d} = 1 - tanh((8*{r_d})**3)"))
+        eqs.append(("l_DDES",
+                    "{l_DDES} = {l_RANS} - {f_d}*max(0, {l_RANS} - %s)"
+                    % les_scale))
+        eqs.append(("Mode_DDES",
+                    "{Mode_DDES} = max(0, min(1, ({l_RANS}-{l_DDES})/1e-9))"))
+
+    return eqs
+
+
 def plan(equations, available):
     """Split the equations into the ones the dataset can feed and the rest.
 
@@ -224,9 +264,9 @@ def equation_inputs(equation):
 def unused_variables(reference, available, protect):
     """The dataset variables no equation reads and none of them produces.
 
-    `reference` is always both chains, even when only one is being run: the
-    other has usually already been written into the dataset, and those results
-    (and its inputs) must not be mistaken for variables nobody wants.
+    `reference` is always every chain, even when only one is being run: the
+    others have usually already been written into the dataset, and those
+    results (and their inputs) must not be mistaken for variables nobody wants.
     """
     protect = {name.lower() for name in protect}
     produced = {name.lower() for name, _ in reference}
@@ -318,9 +358,10 @@ def run(args, chain=general_equations):
         model = detect_model(available) if args.model == "auto" else args.model
         print(f"Dataset        : {len(available)} variables")
 
-    # Both chains, kept aside so that pruning judges "unused" against every
+    # Every chain, kept aside so that pruning judges "unused" against every
     # equation rather than only the ones this run happens to execute.
-    reference = general_equations(model, eps) + scale_equations(model, eps)
+    reference = (general_equations(model, eps) + scale_equations(model, eps)
+                 + mode_equations(model, eps))
     kept, skipped = plan(chain(model, eps), available)
     report_plan(model, kept, skipped)
 
@@ -353,7 +394,8 @@ def run(args, chain=general_equations):
                 ignore_divide_by_zero=args.ignore_divide_by_zero)
 
     computed = {name for name, _ in kept}
-    ranges = [n for n in ("dissipation", "eta", "l_c_over_eta", "l_c_corsin")
+    ranges = [n for n in ("dissipation", "eta", "l_c_over_eta", "l_c_corsin",
+                          "Mode_DES", "Mode_DDES")
               if n in computed]
     if ranges:
         print("\nRanges:")
