@@ -204,6 +204,15 @@ def scale_equations(model=None, eps=0.0):
 MODES = ("sa-des", "sa-ddes", "sst-des", "sst-ddes")
 
 
+def tanh(x):
+    """tanh(x) in exp form, since Tecplot's equation engine has no tanh.
+
+    Written with exp(-2x) so it cannot overflow; only valid for x >= 0,
+    which holds for both callers ((8 r_d)**3 and arg2**2).
+    """
+    return "((1 - exp(-2*(%s)))/(1 + exp(-2*(%s))))" % (x, x)
+
+
 def mode_equations(model=None, eps=0.0, mode="sst-des"):
     """RANS / LES regions of a hybrid run, one of MODES.
 
@@ -234,7 +243,7 @@ def sa_mode_equations(mode):
                     "{r_d} = min(5, ({nu_t} + %s)/({grad}*%s**2*%s**2 + 1e-30))"
                     % (NU, KAPPA, d)))
         # -- shielding: f_d ~ 0 inside the boundary layer, ~1 outside -------
-        eqs.append(("f_d", "{f_d} = 1 - tanh((8*{r_d})**3)"))
+        eqs.append(("f_d", "{f_d} = 1 - %s" % tanh("(8*{r_d})**3")))
         eqs.append(("d_tilde",
                     "{d_tilde} = %s - {f_d}*max(0, %s - %s)" % (d, d, les_scale)))
     else:
@@ -257,12 +266,12 @@ def sst_mode_equations(mode):
 
     if mode == "sst-ddes":
         # -- shielding with the SST blending function F2 (not f_d) ----------
-        # arg2 capped at 10 so tanh(arg2**2) cannot overflow
+        # arg2 capped at 10 to keep arg2**2 moderate
         eqs.append(("arg2",
                     "{arg2} = min(10, max(2*sqrt(%s)/(%s*%s*%s + 1e-30),"
                     " 500*%s/(%s**2*%s + 1e-30)))"
                     % (k, BETA_STAR, omega, d, NU, d, omega)))
-        eqs.append(("F2", "{F2} = tanh({arg2}**2)"))
+        eqs.append(("F2", "{F2} = %s" % tanh("{arg2}**2")))
         eqs.append(("F_DES",
                     "{F_DES} = max({L_t}/%s*(1 - {F2}), 1)" % les_scale))
     else:
