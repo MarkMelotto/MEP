@@ -53,8 +53,12 @@ L_C = 0.00225              # characteristic (cell/probe) length [m]
 
 # DES / DDES RANS-LES region check (des_mode.py); also uses NU above
 DELTA = 0.00225            # grid spacing, max(dx, dy, dz) of the uniform grid [m]
-C_DES = 0.61               # Fluent's single SST value (not the 0.78/0.61 F1 blend)
+KAPPA = 0.4187             # von Karman constant (SA-DDES r_d)
 BETA_STAR = 0.09           # SST beta*
+C_DES_SA = 0.65            # SA-DES constant
+C_DES_SST = 0.61           # Fluent's single SST value (not the 0.78/0.61 F1 blend)
+# LBE density, not in the dataset: rho = 11065 - 1.293*T  [kg/m3]
+DENSITY = "11065 - 1.293*{Static Temperature}"
 
 # Temperature scale: (T_hot - T_ref) - 2*(T_cold - T_ref).  Written out as an
 # expression instead of a pre-multiplied float so the equations stay readable.
@@ -104,7 +108,9 @@ def model_variables(model):
         variables += [f"{axis} Velocity", f"Mean {axis} Velocity",
                       f"RMS {axis} Velocity"]
     if model in ("rans", "des_sst"):
-        variables += [TKE_VAR, "Specific Dissipation Rate", "Distance to wall"]
+        variables += [TKE_VAR, "Specific Dissipation Rate"]
+    if model in ("rans", "des_sst", "des_sa"):
+        variables += ["Distance to wall", "Turbulent Viscosity"]
     if model in ("des_sst", "des_sa", "les", "sgs_only"):
         variables.append(SGS_VAR)
     return variables
@@ -195,27 +201,67 @@ def scale_equations(model=None, eps=0.0):
     return eqs
 
 
-def mode_equations(model=None, eps=0.0, mode="des"):
-    """RANS / LES regions of an SST-DES ('des') or SST-DDES ('ddes') run.
+MODES = ("sa-des", "sa-ddes", "sst-des", "sst-ddes")
 
-    Follows the ANSYS Fluent Theory Guide.  Both modes write {L_t}, {F_DES}
-    and {LES_mode}, so results stay comparable; 'ddes' also writes the
-    shielding inputs {arg2} and {F2}.
+
+def mode_equations(model=None, eps=0.0, mode="sst-des"):
+    """RANS / LES regions of a hybrid run, one of MODES.
+
+    Follows the ANSYS Fluent Theory Guide.  Every mode ends in {LES_mode}
+    (1 = LES, 0 = RANS) and creates only the variables it needs.  SA-DDES is
+    shielded with Spalart's f_d, SST-DDES with the SST blending function F2.
     """
-    k, omega, y = ("{Turbulent Kinetic Energy}", "{Specific Dissipation Rate}",
+    if mode.startswith("sa-"):
+        return sa_mode_equations(mode)
+    return sst_mode_equations(mode)
+
+
+def sa_mode_equations(mode):
+    """SA-DES / SA-DDES: the model uses d_tilde instead of the wall distance d."""
+    d = "{Distance to wall}"
+    les_scale = "(%s*%s)" % (C_DES_SA, DELTA)
+    eqs = []
+
+    if mode == "sa-ddes":
+        # -- r_d needs the KINEMATIC nu_t; Fluent writes dynamic mu_t -------
+        eqs.append(("Density", "{Density} = %s" % DENSITY))
+        eqs.append(("nu_t", "{nu_t} = {Turbulent Viscosity}/({Density} + 1e-30)"))
+        # -- sqrt(U_i,j U_i,j) from the instantaneous velocities -----------
+        grads = " + ".join("dd%s({%s Velocity})**2" % (a, c)
+                           for c in ("X", "Y", "Z") for a in ("x", "y", "z"))
+        eqs.append(("grad", "{grad} = sqrt(%s)" % grads))
+        eqs.append(("r_d",
+                    "{r_d} = min(5, ({nu_t} + %s)/({grad}*%s**2*%s**2 + 1e-30))"
+                    % (NU, KAPPA, d)))
+        # -- shielding: f_d ~ 0 inside the boundary layer, ~1 outside -------
+        eqs.append(("f_d", "{f_d} = 1 - tanh((8*{r_d})**3)"))
+        eqs.append(("d_tilde",
+                    "{d_tilde} = %s - {f_d}*max(0, %s - %s)" % (d, d, les_scale)))
+    else:
+        eqs.append(("d_tilde", "{d_tilde} = min(%s, %s)" % (d, les_scale)))
+
+    # -- 1 where d_tilde < d (LES), 0 where d_tilde = d (RANS) --------------
+    eqs.append(("LES_mode",
+                "{LES_mode} = max(0, min(1, (%s - {d_tilde})/1e-9))" % d))
+    return eqs
+
+
+def sst_mode_equations(mode):
+    """SST-DES / SST-DDES: F_DES multiplies the k destruction term."""
+    k, omega, d = ("{Turbulent Kinetic Energy}", "{Specific Dissipation Rate}",
                    "{Distance to wall}")
-    les_scale = "(%s*%s)" % (C_DES, DELTA)
+    les_scale = "(%s*%s)" % (C_DES_SST, DELTA)
 
     # -- SST turbulent length scale, sqrt(k)/(beta* omega) ----------------
     eqs = [("L_t", "{L_t} = sqrt(%s)/(%s*%s + 1e-30)" % (k, BETA_STAR, omega))]
 
-    if mode == "ddes":
+    if mode == "sst-ddes":
         # -- shielding with the SST blending function F2 (not f_d) ----------
         # arg2 capped at 10 so tanh(arg2**2) cannot overflow
         eqs.append(("arg2",
                     "{arg2} = min(10, max(2*sqrt(%s)/(%s*%s*%s + 1e-30),"
                     " 500*%s/(%s**2*%s + 1e-30)))"
-                    % (k, BETA_STAR, omega, y, NU, y, omega)))
+                    % (k, BETA_STAR, omega, d, NU, d, omega)))
         eqs.append(("F2", "{F2} = tanh({arg2}**2)"))
         eqs.append(("F_DES",
                     "{F_DES} = max({L_t}/%s*(1 - {F2}), 1)" % les_scale))
@@ -224,7 +270,6 @@ def mode_equations(model=None, eps=0.0, mode="des"):
 
     # -- 1 where F_DES > 1 (LES), 0 where F_DES = 1 (RANS) -----------------
     eqs.append(("LES_mode", "{LES_mode} = max(0, min(1, ({F_DES}-1)/1e-9))"))
-
     return eqs
 
 
@@ -340,6 +385,16 @@ def add_common_arguments(parser):
     return parser
 
 
+def load_dataset(path):
+    """Load a .plt / .szplt / .dat file, replacing the active frame's data."""
+    import tecplot as tp
+    from tecplot.constant import ReadDataOption
+    if path.lower().endswith(".szplt"):
+        tp.data.load_tecplot_szl(path, read_data_option=ReadDataOption.Replace)
+    else:
+        tp.data.load_tecplot(path, read_data_option=ReadDataOption.Replace)
+
+
 def run(args, chain=general_equations):
     """Plan and execute one chain (general, scale or mode equations).
 
@@ -354,6 +409,8 @@ def run(args, chain=general_equations):
     else:
         import tecplot as tp
         tp.session.connect()
+        if getattr(args, "input", None):
+            load_dataset(args.input)
         dataset = tp.active_frame().dataset
         available = list(dataset.variable_names)
         model = detect_model(available) if args.model == "auto" else args.model
@@ -362,7 +419,8 @@ def run(args, chain=general_equations):
     # Every chain, kept aside so that pruning judges "unused" against every
     # equation rather than only the ones this run happens to execute.
     reference = (general_equations(model, eps) + scale_equations(model, eps)
-                 + mode_equations(model, eps, "ddes"))
+                 + mode_equations(model, eps, "sa-ddes")
+                 + mode_equations(model, eps, "sst-ddes"))
     kept, skipped = plan(chain(model, eps), available)
     report_plan(model, kept, skipped)
 
@@ -396,7 +454,7 @@ def run(args, chain=general_equations):
 
     computed = {name for name, _ in kept}
     ranges = [n for n in ("dissipation", "eta", "l_c_over_eta", "l_c_corsin",
-                          "L_t", "F_DES")
+                          "L_t", "F_DES", "d_tilde")
               if n in computed]
     if ranges:
         print("\nRanges:")

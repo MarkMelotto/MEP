@@ -1,48 +1,50 @@
-"""Mark the RANS and LES regions of an SST-DES / SST-DDES run in Tecplot 360.
+"""Mark where a hybrid RANS/LES run was in RANS and where in LES mode.
 
-Follows the ANSYS Fluent Theory Guide for SST-based DES:
+Follows the ANSYS Fluent Theory Guide for the four hybrid models:
 
-    L_t   = sqrt(k)/(beta* omega)
-    des : F_DES = max(L_t/(C_des Delta), 1)
-    ddes: F_DES = max(L_t/(C_des Delta) (1 - F2), 1),   F2 = tanh(arg2^2)
-          arg2  = max(2 sqrt(k)/(beta* omega y), 500 nu/(y^2 omega))
+    sa-des  : d_tilde = min(d, C_des_SA Delta)
+    sa-ddes : d_tilde = d - f_d max(0, d - C_des_SA Delta)
+              f_d = 1 - tanh((8 r_d)^3),  r_d = (nu_t + nu)/(|grad U| kappa^2 d^2)
+    sst-des : F_DES = max(L_t/(C_des_SST Delta), 1),  L_t = sqrt(k)/(beta* omega)
+    sst-ddes: F_DES = max(L_t/(C_des_SST Delta) (1 - F2), 1),  F2 = tanh(arg2^2)
 
-Fluent's delayed option shields with the SST blending function F2, not with
-Spalart's f_d / r_d.  Both modes write {L_t}, {F_DES} and {LES_mode} (1 where
-F_DES > 1, i.e. LES; 0 = RANS), so the results stay comparable.  Needs
-{Turbulent Kinetic Energy}, {Specific Dissipation Rate} and, for ddes,
-{Distance to wall}.  Constants (DELTA, C_DES, BETA_STAR, NU) are at the top of
-derived_variables.py.
+SA-DDES is shielded with Spalart's f_d, SST-DDES with the SST blending function
+F2.  Every mode writes {LES_mode} (1 = LES, 0 = RANS) plus only the variables
+it needs.  SA-DDES converts Fluent's dynamic {Turbulent Viscosity} to nu_t with
+the LBE density.  Constants are at the top of derived_variables.py.
 
 usage:
 
-    > python des_mode.py                 # asks DES or DDES
-    > python des_mode.py --mode des
-    > python des_mode.py --mode ddes
-    > python des_mode.py --mode ddes --dry-run   # just print the equations
-    > python des_mode.py --mode des --zones 1-4,7
+    > python des_mode.py                                 # asks for the mode
+    > python des_mode.py --mode sst-ddes
+    > python des_mode.py --mode sa-ddes --input case.szplt
+    > python des_mode.py --mode sa-des --dry-run         # just print the equations
+    > python des_mode.py --mode sst-des --zones 1-4,7
 
-Enable "Scripting -> PyTecplot Connections" in the Tecplot 360 GUI before
-running without --dry-run.
+Without --input the dataset already open in Tecplot is used; with it, the file
+replaces the active frame's data.  Enable "Scripting -> PyTecplot Connections"
+in the Tecplot 360 GUI before running without --dry-run.
 """
 import argparse
 
-from derived_variables import add_common_arguments, mode_equations, run
+from derived_variables import MODES, add_common_arguments, mode_equations, run
 
 
-CHOICES = {"1": "des", "2": "ddes"}
+CHOICES = {str(i): mode for i, mode in enumerate(MODES, start=1)}
 
 
 def ask_mode():
-    """Ask for the DES formulation until a valid choice is given."""
-    print("Which formulation?\n  1) DES\n  2) DDES")
+    """Ask for the hybrid model until a valid choice is given."""
+    print("Which model?")
+    for number, mode in CHOICES.items():
+        print(f"  {number}) {mode.upper()}")
     while True:
-        answer = input("Choice [1-2]: ").strip().lower()
+        answer = input(f"Choice [1-{len(CHOICES)}]: ").strip().lower()
         if answer in CHOICES:
             return CHOICES[answer]
-        if answer in CHOICES.values():
+        if answer in MODES:
             return answer
-        print("Please enter 1 or 2.")
+        print(f"Please enter a number from 1 to {len(CHOICES)}.")
 
 
 def report_les_fraction(dataset, zones):
@@ -59,11 +61,15 @@ def report_les_fraction(dataset, zones):
 
 def main():
     parser = add_common_arguments(argparse.ArgumentParser(description=__doc__))
-    parser.add_argument("--mode", choices=["des", "ddes"],
-                        help="DES or DDES formulation (asked if not given)")
+    parser.add_argument("--mode", choices=MODES,
+                        help="hybrid model formulation (asked if not given)")
+    parser.add_argument("--input", metavar="FILE",
+                        help=".plt / .szplt / .dat to load (default: the "
+                             "dataset already open in Tecplot)")
     args = parser.parse_args()
     mode = args.mode or ask_mode()
-    print(f"Formulation    : SST-{mode.upper()}")
+    print(f"Mode           : {mode.upper()}")
+    print(f"Input          : {args.input or 'active Tecplot dataset'}")
 
     result = run(args, chain=lambda model, eps: mode_equations(model, eps, mode))
     if result is not None and "LES_mode" in result[2]:
