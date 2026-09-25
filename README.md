@@ -4,7 +4,7 @@
 > in this repository. It may contain inaccuracies. Check the scripts themselves
 > for the definitive behaviour.
 
-Post-processing and setup scripts for CFD simulations (ANSYS Fluent) of a
+Code for my Master End Project (MEP): post-processing and setup scripts for CFD simulations (ANSYS Fluent) of a
 triple-jet mixing case, including liquid-metal (lead-bismuth eutectic, LBE)
 mixed-convection cases. Most of the tools either run against **Tecplot 360**
 through PyTecplot, or generate Tecplot equation strings to paste into its
